@@ -1,0 +1,124 @@
+defaults:
+  - _self_
+  - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
+  - /data: lm1b
+  - /model: small
+  - /strategy: ddp
+  - /noise: loglinear
+  - /lr_scheduler: constant_warmup
+  - /classifier_model: null
+  - /guidance: null
+
+mode: train  # train / train_classifier / ppl_eval
+diffusion: absorbing_state
+backbone: dit  # dit / dimamba / ar
+classifier_backbone: null
+parameterization: subs  # subs / d3pm / ar
+time_conditioning: False
+subs_masking: False
+zero_recon_loss: False  # Use for UDLM
+T: 0  # 0 (continuous time) / 1000
+corrector_training: False
+use_weighted_corrector_loss: True
+use_model_argmax_output: True
+use_model_outputs_as_corrector_input: False
+use_argmax_for_corrector: True
+corrector_training_start_step: -1
+mdlm_loss_weight: 0.0
+corrector_loss_weight: 0.0
+corrector_loss_errors_upweighted: False
+
+is_vision: False
+seed: 1
+
+loader:
+  global_batch_size: 512
+  eval_global_batch_size: ${.global_batch_size}
+  # Note: batch_size and eval_batch_size are **per machine**
+  batch_size: ${div_up:${.global_batch_size}, ${eval:${trainer.devices} * ${trainer.num_nodes}}}
+  eval_batch_size: ${div_up:${.eval_global_batch_size}, ${eval:${trainer.devices} * ${trainer.num_nodes}}}
+  num_workers: ${eval:"len(__import__('os').sched_getaffinity(0))"}
+  pin_memory: True
+  persistent_workers: True
+
+sampling:
+  use_cache: True
+  steps: 128
+  # Note: batch_size is **per machine**
+  batch_size: ${loader.eval_batch_size}
+  num_sample_batches: 2  # Total samples: `num_gpus` * `batch_size` * `num_sample_batches`
+  use_float64: False
+  corrector_prior_is_argmax: True
+  corrector_sampling: 'argmax'
+  corrector_every_n_steps: 1
+  corrector_steps: 0
+  corrector_start_iter: 0
+  corrector_top_k: 0
+  nucleus_p: 1.0
+
+training:
+  ema: 0.9999
+  antithetic_sampling: True
+  importance_sampling: False
+  sampling_eps_training: 1e-3
+  sampling_eps: 1e-3
+  change_of_variables: False
+  compute_loss_on_pad_tokens: False
+  use_simple_ce_loss: False  # Ignore ELBO; just use CE
+  guidance: # Can turn off with `training.guidance: null`
+    cond_dropout: 0.0
+
+eval:
+  checkpoint_path: ''  # Used to evaluate a checkpoint after training.
+  disable_ema: False
+  generate_samples: True
+  generated_samples_path: ''
+  max_samples: 50_000
+  skip_mauve: False
+
+optim:
+  weight_decay: 0
+  lr: 3e-4
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-8
+
+trainer:
+  _target_: lightning.Trainer
+  accelerator: cuda
+  num_nodes: 1
+  devices: ${device_count:}
+  accumulate_grad_batches: ${div_up:${loader.global_batch_size}, ${eval:${trainer.devices} * ${loader.batch_size} * ${trainer.num_nodes}}}
+  gradient_clip_val: 1.0
+  precision: 'bf16'
+  num_sanity_val_steps: 2
+  max_steps: 2_000_000
+  log_every_n_steps: 10
+  limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
+  limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
+  val_check_interval: 10000
+
+wandb:
+  project: mdlm-corrector
+  notes: Guided Discrete Diffusion
+  group: null
+  job_type: training
+  name: null
+  id: ${.name}_${seed}
+  tags:
+    - ${noise.type}
+    - ${data.train}
+    - ${data.valid}
+
+hydra:
+  run:
+    dir: ./outputs/${data.train}/${now:%Y.%m.%d}/${now:%H%M%S}
+  job:
+    chdir: true
+
+checkpointing:
+  # Use custom `save_dir` if, e.g., saving to S3 bucket, otherwise leave this parameter as is
+  save_dir: ${cwd:}
+  # Note: `checkpoints` path should correspond to `checkpoint_every_n_steps.dirpath`
+  resume_from_ckpt: true
+  resume_ckpt_path: ${.save_dir}/checkpoints/last.ckpt
