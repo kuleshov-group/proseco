@@ -96,8 +96,8 @@ We also provide sample `slurm` scripts for launching pre-training and evaluation
 ## Using HuggingFace Models
 <a name="hf_models"></a>
 We provide pre-trained models on HuggingFace 🤗:
-- We release the [LLaDA + ProSeCO SFT model](kuleshov-group/proseco-llada-sft)
-- We release the [ProSeCo model trained from scratch on OWT](kuleshov-group/proseco-owt)
+- We release the LLaDA + ProSeCO SFT model: [kuleshov-group/proseco-llada-sft](https://huggingface.co/kuleshov-group/proseco-llada-sft)
+- We release the ProSeCo model trained from scratch on OWT: [kuleshov-group/proseco-owt)](https://huggingface.co/kuleshov-group/proseco-owt)
 
 Please see the README pages for these models on HuggingFace or our paper for more
 details about the training of these models.
