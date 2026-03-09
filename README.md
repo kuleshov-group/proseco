@@ -89,7 +89,6 @@ to log experiments and eval curves.
 ## Reproducing Experiments
 <a name="reproducing-experiments"></a>
 
-Below, we describe the steps required for reproducing the experiments in the paper.
 Throughout, the main entry point for running experiments is the [`main.py`](./main.py) script.
 We also provide sample `slurm` scripts for launching pre-training and evaluation experiments in the [`scrips/`](./scripts) directory.
 
