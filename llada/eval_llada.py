@@ -33,7 +33,7 @@ from lm_eval.__main__ import cli_evaluate
 from lm_eval.api.model import LM
 from lm_eval.api.registry import register_model
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer
 
 from generate import generate
 
@@ -65,8 +65,6 @@ class LLaDAEvalHarness(LM):
         use_cache=False,
         threshold=None,
         factor=None,
-        correct_all=True,
-        remasking_only_masked=True,
         max_corrector_steps_per_loop=0,
         apply_corrector_every_n_steps=1,
         early_eos_stopping=True,
@@ -109,13 +107,10 @@ class LLaDAEvalHarness(LM):
         model_kwargs = {}
         if self.accelerator is not None:
             model_kwargs.update({"device_map": {"": f"{self.accelerator.device}"}})
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        config.flash_attention = True
         self.model = AutoModel.from_pretrained(
           model_path,
           trust_remote_code=True,
           torch_dtype=torch.bfloat16,
-          config=config,
           **model_kwargs
         )
         self.model.eval()
@@ -148,8 +143,6 @@ class LLaDAEvalHarness(LM):
         self.use_cache = use_cache
         self.threshold = threshold
         self.factor = factor
-        self.correct_all = correct_all
-        self.remasking_only_masked = remasking_only_masked
         self.max_corrector_steps_per_loop = max_corrector_steps_per_loop
         self.apply_corrector_every_n_steps = apply_corrector_every_n_steps
         self.is_instruct = True
@@ -177,7 +170,7 @@ class LLaDAEvalHarness(LM):
         nfes = []
         num_tokens = 0
         num_nfe = {
-            "nfe": 0,
+            "predictor_nfe": 0,
             "corrector_nfe": 0,
             "total_nfe": 0,
         }
@@ -269,7 +262,6 @@ class LLaDAEvalHarness(LM):
                 remasking=self.remasking,
                 mask_id=self.mask_id,
                 threshold=self.threshold,
-                remasking_only_masked=self.remasking_only_masked,
                 max_corrector_steps_per_loop=self.max_corrector_steps_per_loop,
                 apply_corrector_every_n_steps=self.apply_corrector_every_n_steps,
                 early_eos_stopping=self.early_eos_stopping,

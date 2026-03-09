@@ -59,165 +59,208 @@ def get_num_transfer_tokens(block_mask_index: torch.Tensor, steps: int) -> torch
     return num_transfer_tokens
 
 
-@ torch.no_grad()
+@torch.no_grad()
 def generate(
     model,
     prompt,
-    steps=128,
-    gen_length=128,
-    block_length=128,
-    temperature=0.0,
-    remasking="low_confidence",
+    steps=256,
+    gen_length=256,
+    block_length=32,
+    temperature=0.,
+    remasking='low_confidence',
     mask_id=126336,
     threshold=None,
-    remasking_only_masked=True,
-    apply_corrector_every_n_steps=1,
-    max_corrector_steps_per_loop=0,
-    early_eos_stopping=False,
+    max_corrector_steps_per_loop=4,
+    apply_corrector_every_n_steps=2,
+    early_eos_stopping=True,
     tokenizer=None,
     disable_pbar=True,
     save_intermediate_outputs=False,
 ):
-    """
+    """Semi-autoregressive masked diffusion generation with corrector refinement.
+
+    Generates tokens by iteratively unmasking positions in blocks. Within each
+    block, a predictor pass proposes tokens for all masked positions, then a
+    subset is committed based on confidence ranking (or a threshold). An optional
+    corrector refines predictions via fixed-point iterations over all tokens
+    generated so far.
+
     Args:
-        model: Mask predictor.
-        prompt: A tensor of shape (1, L).
-        steps: Sampling steps, less than or equal to gen_length.
-        gen_length: Generated answer length.
-        block_length: Block length, less than or equal to gen_length.
-          If less than gen_length, it means using semi_autoregressive remasking.
-        temperature: Categorical distribution sampling temperature.
-        remasking: Remasking strategy. 'low_confidence' or 'random'.
-        mask_id: The toke id of [MASK] is 126336.
-        threshold: (Optional) float value for confidence-based threshold used in
-          fast-dllm decoding.
-        tokenizer: Tokenizer (used for doing early stopping on EOS).
-        remasking_only_masked: Whether to remasking only masked tokens.
-            When using the corrector we could potentially remask already decoded tokens
-            as well.
-        apply_corrector_every_n_steps: Frequency for applying corrector steps.
-        max_corrector_steps_per_loop: Maximum number of corrector steps per loop.
-        early_eos_stopping: Whether to stop early on EOS tokens.
-        disable_pbar: Disable progress bar.
-        save_intermediate_outputs: Whether to save intermediate outputs after each step.
+        model: Masked diffusion language model whose forward pass returns an
+            object with a ``.logits`` attribute of shape ``(B, L, V)``.
+        prompt: Input token ids, shape ``(B, prompt_len)``.
+        steps: Total unmasking steps across all blocks.
+        gen_length: Number of tokens to generate. Must be divisible by
+            ``block_length``.
+        block_length: Tokens per semi-autoregressive block.
+        temperature: Gumbel-noise temperature for sampling (0 = greedy argmax).
+        remasking: Remasking strategy: ``'low_confidence'`` or ``'random'``.
+        mask_id: Token id used for ``[MASK]``.
+        threshold: If set, use confidence-threshold unmasking (as in fast-DLLM)
+            instead of the fixed-schedule top-k strategy.
+        max_corrector_steps_per_loop: Maximum corrector (fixed-point) iterations
+            per generation step. Set to 0 to disable the corrector.
+        apply_corrector_every_n_steps: Run the corrector every N predictor steps.
+        early_eos_stopping: If True, halt generation when the last position in a
+            block is EOS for every batch element, and fill remaining masks with
+            EOS.
+        tokenizer: Required when ``early_eos_stopping`` is True.
+        disable_pbar: If True, suppress the progress bar.
+        save_intermediate_outputs: If True, record the sequence state after each
+            step.
+
+    Returns:
+        Tuple of ``(x, metrics, intermediate_outputs)`` where
+
+        - **x**: Token ids, shape ``(B, prompt_len + gen_length)``.
+        - **metrics**: ``dict`` with keys ``'predictor_nfe'``,
+          ``'corrector_nfe'``, ``'total_nfe'``.
+        - **intermediate_outputs**: ``list[dict]`` (empty when
+          ``save_intermediate_outputs`` is False).
     """
+    prompt_len = prompt.shape[1]
+    batch_size = prompt.shape[0]
+
+    # Initialise sequence: [prompt tokens | MASK ... MASK]
     x = torch.full(
-      (prompt.shape[0], prompt.shape[1] + gen_length),
-      mask_id,
-      dtype=torch.long
+        (batch_size, prompt_len + gen_length), mask_id, dtype=torch.long,
     ).to(model.device)
-    x[:, :prompt.shape[1]] = prompt.clone()
+    x[:, :prompt_len] = prompt.clone()
 
     assert gen_length % block_length == 0
     num_blocks = gen_length // block_length
 
     if steps % num_blocks != 0:
-        print(f"ERROR: steps {steps} is not divisible by num_blocks {num_blocks}")
-        exit(0)
-
+        raise ValueError(
+            f"steps ({steps}) must be divisible by num_blocks ({num_blocks})"
+        )
     steps_per_block = steps // num_blocks
 
-    nfe = 0
+    predictor_nfe = 0
     corrector_nfe = 0
     total_nfe = 0
-    saved_intermediate_outputs = []
+    intermediate_outputs = []
+
     block_pbar = tqdm(range(num_blocks), leave=False, disable=disable_pbar)
-    for num_block in block_pbar:
-        block_start_index = prompt.shape[1] + num_block * block_length
-        block_end_index = prompt.shape[1] + (num_block + 1) * block_length
-        block_mask_index = x[:, block_start_index : block_end_index] == mask_id
-        num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps_per_block)
-        if not remasking_only_masked:
-            block_index = torch.zeros(x.shape, device=x.device, dtype=torch.bool)
-            block_index[:, block_start_index : block_end_index] = True
-            # This makes sure that num_transfer_tokens is correct for the next step
-            # while allowing for the selection of non-masked tokens as well
-            num_transfer_tokens = num_transfer_tokens.cumsum(dim=-1)
-        else:
-            block_index = None
-        i = 0
-        is_corrector = False
+    for block_idx in block_pbar:
+        block_start = prompt_len + block_idx * block_length
+        block_end = prompt_len + (block_idx + 1) * block_length
+
+        block_mask = (x[:, block_start:block_end] == mask_id)
+        num_transfer_tokens = get_num_transfer_tokens(block_mask, steps_per_block)
+
+        # The corrector refines all generated tokens (across past blocks),
+        # not just the current block, so the active region starts at the
+        # prompt boundary rather than at block_start.
+        active_region_start = prompt_len
+
+        step = 0
+        applied_corrector = False
+
         while True:
-            nfe += 1
+            # --- Predictor step ---
+            predictor_nfe += 1
             total_nfe += 1
-            mask_index = x == mask_id
+
+            global_mask = (x == mask_id)
             logits = model(x).logits
-            mask_index[:, block_end_index :] = 0
-            block_mask_index = mask_index[:, prompt.shape[1]:block_end_index]
-            # Correct tokens within a diffusion step
-            if (i+1) % apply_corrector_every_n_steps == 0:
-                ci_step = 0
+
+            # Ignore mask positions beyond the current block boundary
+            global_mask[:, block_end:] = False
+            active_mask = global_mask[:, active_region_start:block_end]
+
+            # --- Corrector steps (fixed-point iteration) ---
+            if (step + 1) % apply_corrector_every_n_steps == 0:
+                corrector_step = 0
+
                 if max_corrector_steps_per_loop > 0:
                     corrector_x = x.clone()
-                    corrector_x[:, prompt.shape[1]:] = torch.argmax(logits, dim=-1)[:, prompt.shape[1]:]
-                    corrector_x[:, prompt.shape[1]:block_end_index][~block_mask_index] = x[:, prompt.shape[1]:block_end_index][~block_mask_index]
-                    is_corrector = True
+                    # Fill all positions from active_region_start onward with
+                    # greedy predictions so the corrector never sees mask tokens.
+                    corrector_x[:, active_region_start:] = torch.argmax(
+                        logits, dim=-1,
+                    )[:, active_region_start:]
+                    # Restore already-committed (non-masked) tokens
+                    corrector_x[:, active_region_start:block_end][~active_mask] = (
+                        x[:, active_region_start:block_end][~active_mask]
+                    )
+                    applied_corrector = True
                 else:
                     corrector_x, corrector_logits = None, None
-                while ci_step < max_corrector_steps_per_loop:
-                    ci_step += 1
+
+                while corrector_step < max_corrector_steps_per_loop:
+                    corrector_step += 1
                     corrector_nfe += 1
                     total_nfe += 1
                     block_pbar.set_postfix(
-                        nfe=nfe,
+                        predictor_nfe=predictor_nfe,
                         corrector_nfe=corrector_nfe,
-                        total=total_nfe,
+                        total_nfe=total_nfe,
                     )
-                    corrector_logits = model(corrector_x).logits[:, prompt.shape[1]:block_end_index]
-                    corrected_output = torch.argmax(corrector_logits, dim=-1)
-                    if torch.allclose(corrector_x[:, prompt.shape[1]:block_end_index], corrected_output):
-                        break
-                    corrector_x[:, prompt.shape[1]:block_end_index] = corrected_output
-                if max_corrector_steps_per_loop > 0:
-                    logits[:, prompt.shape[1]:block_end_index] = corrector_logits
-                    block_mask_index = mask_index[:, prompt.shape[1]:block_end_index]
-                    x[:, prompt.shape[1]:block_end_index][~block_mask_index] = corrected_output[~block_mask_index]
+                    corrector_logits = model(corrector_x).logits[
+                        :, active_region_start:block_end
+                    ]
+                    corrected_tokens = torch.argmax(corrector_logits, dim=-1)
 
+                    if torch.allclose(
+                        corrector_x[:, active_region_start:block_end],
+                        corrected_tokens,
+                    ):
+                        break
+                    corrector_x[:, active_region_start:block_end] = corrected_tokens
+
+                # Merge corrector outputs back into the main sequence
+                if max_corrector_steps_per_loop > 0:
+                    logits[:, active_region_start:block_end] = corrector_logits
+                    active_mask = global_mask[:, active_region_start:block_end]
+                    x[:, active_region_start:block_end][~active_mask] = (
+                        corrected_tokens[~active_mask]
+                    )
+
+            # --- Select which tokens to unmask this step ---
             x0, transfer_index = get_transfer_index(
                 logits,
                 temperature,
                 remasking,
-                # `block_index` remasks all positions in the block, change to
-                # `mask_index` for selecting to remask only masked positions and make
-                # sure that `num_transfer_tokens` is not with `cumsum`
-                mask_index if remasking_only_masked else block_index,
+                global_mask,
                 x,
-                num_transfer_tokens[:, i] if threshold is None else None,
+                num_transfer_tokens[:, step] if threshold is None else None,
                 threshold,
             )
             x[transfer_index] = x0[transfer_index]
-            i += 1
+            step += 1
+
             block_pbar.set_postfix(
-                nfe=nfe,
+                predictor_nfe=predictor_nfe,
                 corrector_nfe=corrector_nfe,
-                total=total_nfe,
+                total_nfe=total_nfe,
             )
+
             if save_intermediate_outputs:
-                saved_intermediate_outputs.append(
-                    {
-                        "step": i,
-                        "is_corrector": is_corrector,
-                        "output": x[:, prompt.shape[1]:block_end_index].detach().cpu(),
-                    }
-                )
-            if (
-                x[
-                    :,
-                    prompt.shape[1] + num_block * block_length : prompt.shape[1]
-                    + (num_block + 1) * block_length,
-                ]
-                == mask_id
-            ).sum() == 0:
+                intermediate_outputs.append({
+                    "step": step,
+                    "applied_corrector": applied_corrector,
+                    "output": x[:, prompt_len:block_end].detach().cpu(),
+                })
+
+            # All mask tokens in the current block have been revealed
+            if (x[:, block_start:block_end] == mask_id).sum() == 0:
                 break
-        if early_eos_stopping and tokenizer is not None and all(x[:, block_end_index-1] == tokenizer.eos_token_id):
+
+        # Stop early when every batch element ends the block with EOS
+        if (
+            early_eos_stopping
+            and tokenizer is not None
+            and (x[:, block_end - 1] == tokenizer.eos_token_id).all()
+        ):
             x[x == mask_id] = tokenizer.eos_token_id
             break
 
     return x, {
-        "nfe": nfe,
+        "predictor_nfe": predictor_nfe,
         "corrector_nfe": corrector_nfe,
         "total_nfe": total_nfe,
-    }, saved_intermediate_outputs
+    }, intermediate_outputs
 
 
 
