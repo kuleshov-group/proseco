@@ -8,10 +8,10 @@
 # shellcheck source=${HOME}/.bashrc disable=SC1091
 source "${CONDA_SHELL}"
 if [ -z "${CONDA_PREFIX}" ]; then
-    conda activate discdiff
- elif [[ "${CONDA_PREFIX}" != *"/discdiff" ]]; then
+    conda activate proseco
+ elif [[ "${CONDA_PREFIX}" != *"/proseco" ]]; then
   conda deactivate
-  conda activate discdiff
+  conda activate proseco
 fi
 
 # Setup HF cache
