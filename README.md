@@ -73,8 +73,8 @@ from [HuggingFace](https://huggingface.co/collections/kuleshov-group/proseco).
 To get started, create a conda environment containing the required dependencies.
 
 ```bash
-conda env create -f requirements.yaml
-conda activate discdiff
+./create_env.sh
+conda activate proseco
 ```
 
 Create the following directories to store saved models and slurm logs:
