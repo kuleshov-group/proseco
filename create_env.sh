@@ -92,6 +92,9 @@ pip install \
     pyparsing==3.3.2 \
     pytz==2026.1.post1
 
+# Installing nemo_skills 0.7.0 (required for llada/eval_llada.py)
+pip install "git+https://github.com/NVIDIA-NeMo/Skills.git@da85a881d972e6fec847b90cf553a0bf9bf10638"
+
 echo "=== Installing CUDA extension packages (require torch at build time) ==="
 
 # Create a temporary directory inside your conda environment on the shared drive

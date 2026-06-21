@@ -1,25 +1,48 @@
 #!/bin/bash
 
-# Set the environment variables first before running the command.
-cd ../ || exit  # Go to the root directory of the repo
-source setup_env.sh || exit
+# Launch a nemo_skills benchmark evaluation for a LLaDA + ProSeCo diffusion model.
+#
+# This drives the nemo_skills-based evaluation harness (eval_llada.py).
+#
+# It is driven by environment variables (see eval_wrapper.sh for a sweep
+# launcher) and falls back to sensible defaults so it can also be run directly.
+
+# Run this script from the repo root (the parent of the llada folder), e.g.:
+#     bash llada/eval_llada.sh
+
+source ./setup_env.sh || exit
 export HF_ALLOW_CODE_EVAL=1
 export HF_DATASETS_TRUST_REMOTE_CODE=true
-cd ./llada || exit  # Go to the root directory of the repo
 
-task=${TASK}
-length=${LENGTH}
-block_length=${BLOCK_LENGTH}
-num_fewshot=${NUM_FEWSHOT}
-steps=${STEPS}
-apply_corrector_every_n_steps=${APPLY_CORRECTOR_EVERY_N_STEPS}
-max_corrector_steps_per_loop=${MAX_CORRECTOR_STEPS_PER_LOOP}
-early_eos_stopping=${EARLY_EOS_STOPPING}
-tokenizer_path='GSAI-ML/LLaDA-8B-Instruct'
-model_path=${MODEL_PATH}
-save_dir="${BASE_SAVE_DIR}/${task}/num_fewshot-${num_fewshot}/length-${length}--block_length-${block_length}--steps-${steps}--early_eos_stopping-${early_eos_stopping}--apply_corrector_every_n_steps-${apply_corrector_every_n_steps}--max_corrector_steps_per_loop-${max_corrector_steps_per_loop}"
+# nemo_skills benchmark name: gsm8k, human-eval, mbpp, hendrycks_math, ...
+benchmark=${BENCHMARK:-human-eval}
+gen_length=${LENGTH:-1024}
+block_length=${BLOCK_LENGTH:-32}
+steps=${STEPS:-1024}
+apply_corrector_every_n_steps=${APPLY_CORRECTOR_EVERY_N_STEPS:-2}
+max_corrector_steps_per_loop=${MAX_CORRECTOR_STEPS_PER_LOOP:-4}
+early_eos_stopping=${EARLY_EOS_STOPPING:-True}
+threshold=${THRESHOLD:-None}
+tokenizer_path=${TOKENIZER_PATH:-'GSAI-ML/LLaDA-8B-Instruct'}
+model_path=${MODEL_PATH:-'kuleshov-group/proseco-llada-sft'}
+prompt_config=${PROMPT_CONFIG:-"${PWD}/llada/prompt_configs/code.yaml"}
+num_gpus=${NUM_GPUS:-8}
+BASE_SAVE_DIR=${BASE_SAVE_DIR:-"${PWD}/llada/outputs"}
 
-accelerate launch eval_llada.py --tasks ${task} --num_fewshot ${num_fewshot} \
---confirm_run_unsafe_code --model llada_dist \
---output_path ${save_dir} --log_samples \
---model_args model_path=${model_path},tokenizer_path=${tokenizer_path},early_eos_stopping=${early_eos_stopping},gen_length=${length},steps=${steps},block_length=${block_length},show_speed=True,apply_corrector_every_n_steps=${apply_corrector_every_n_steps},max_corrector_steps_per_loop=${max_corrector_steps_per_loop},save_dir=${save_dir}
+save_dir="${BASE_SAVE_DIR}/${benchmark}/length-${gen_length}--block_length-${block_length}--steps-${steps}--early_eos_stopping-${early_eos_stopping}--apply_corrector_every_n_steps-${apply_corrector_every_n_steps}--max_corrector_steps_per_loop-${max_corrector_steps_per_loop}"
+
+# Data-parallel: accelerate launches one process per GPU and eval_llada.py
+# shards the dataset across them (>1 process auto-enables multi-GPU).
+accelerate launch --num_processes "${num_gpus}" llada/eval_llada.py \
+  --benchmark "${benchmark}" \
+  --model_path "${model_path}" \
+  --tokenizer_path "${tokenizer_path}" \
+  --gen_length "${gen_length}" \
+  --block_length "${block_length}" \
+  --steps "${steps}" \
+  --threshold "${threshold}" \
+  --apply_corrector_every_n_steps "${apply_corrector_every_n_steps}" \
+  --max_corrector_steps_per_loop "${max_corrector_steps_per_loop}" \
+  --early_eos_stopping "${early_eos_stopping}" \
+  --output_dir "${save_dir}" \
+  --prompt_config "${prompt_config}"

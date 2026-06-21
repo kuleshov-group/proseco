@@ -1,17 +1,26 @@
 #!/bin/bash
 
-WATCH_FOLDER=$(realpath "../watch_folder")
-mkdir -p ${WATCH_FOLDER}
+# Sweep launcher for the nemo_skills-based evaluation (eval_llada.sh).
+#
+# Run this from the repo root (the parent of the llada folder).
+#
+# Sweeps over the two corrector hyperparameters:
+#     apply_corrector_every_n_steps
+#     max_corrector_steps_per_loop
+# submitting one slurm job per configuration.
+
+WATCH_FOLDER=$(realpath "./watch_folder")
+mkdir -p "${WATCH_FOLDER}"
 NUM_VISIBLE_DEVICES=1
 
-BASE_SAVE_DIR="${PWD}/outputs"
+BASE_SAVE_DIR="${PWD}/llada/outputs"
 MODEL="corrector"  # "corrector" or "instruct"
-TASK="gsm8k"  # "gsm8k", "humaneval", "mbpp"
+BENCHMARK="human-eval"  # nemo_skills name: "gsm8k", "human-eval", "mbpp", "hendrycks_math"
+PROMPT_CONFIG="${PWD}/llada/prompt_configs/code.yaml"   # optional nemo_skills prompt-config name or yaml path
 BLOCK_LENGTH=32
 EARLY_EOS_STOPPING=True
-LENGTH=256
-NUM_FEWSHOT=5
-
+LENGTH=1024
+THRESHOLD=None
 
 if [[ ${MODEL} == "corrector" ]]; then
   MODEL_PATH='kuleshov-group/proseco-llada-sft'
@@ -20,14 +29,13 @@ elif [[ ${MODEL} == "instruct" ]]; then
 fi
 BASE_SAVE_DIR="${BASE_SAVE_DIR}/${MODEL}"
 
-for STEPS in 32 64 128 256; do
+for STEPS in 128 256 512 1024; do
   for APPLY_CORRECTOR_EVERY_N_STEPS in 1 2 4 8; do
-    for MAX_CORRECTOR_STEPS_PER_LOOP in 1 2 4 8 16 32; do
+    for MAX_CORRECTOR_STEPS_PER_LOOP in 1 2 4 8; do
 
-    EXPORT_STR="ALL,TASK=${TASK},NUM_FEWSHOT=${NUM_FEWSHOT},LENGTH=${LENGTH},BLOCK_LENGTH=${BLOCK_LENGTH},EARLY_EOS_STOPPING=${EARLY_EOS_STOPPING}"
-
+    EXPORT_STR="ALL,BENCHMARK=${BENCHMARK},PROMPT_CONFIG=${PROMPT_CONFIG},LENGTH=${LENGTH},BLOCK_LENGTH=${BLOCK_LENGTH},EARLY_EOS_STOPPING=${EARLY_EOS_STOPPING},THRESHOLD=${THRESHOLD}"
     EXPORT_STR="${EXPORT_STR},BASE_SAVE_DIR=${BASE_SAVE_DIR},MODEL_PATH=${MODEL_PATH},STEPS=${STEPS},APPLY_CORRECTOR_EVERY_N_STEPS=${APPLY_CORRECTOR_EVERY_N_STEPS},MAX_CORRECTOR_STEPS_PER_LOOP=${MAX_CORRECTOR_STEPS_PER_LOOP}"
-    JOB_NAME="${MODEL}-${TASK}-${NUM_FEWSHOT}shot_L-${LENGTH}_T-${STEPS}_F-${APPLY_CORRECTOR_EVERY_N_STEPS}_S-${MAX_CORRECTOR_STEPS_PER_LOOP}"
+    JOB_NAME="${MODEL}-${BENCHMARK}_L-${LENGTH}_T-${STEPS}_F-${APPLY_CORRECTOR_EVERY_N_STEPS}_S-${MAX_CORRECTOR_STEPS_PER_LOOP}"
 
     sbatch \
       --job-name="${JOB_NAME}" \
@@ -43,20 +51,21 @@ for STEPS in 32 64 128 256; do
       --mail-type=ALL \
       --requeue \
       --export="${EXPORT_STR}" \
-      "$(realpath "./eval_llada.sh")"
+      "$(realpath "./llada/eval_llada.sh")"
 
 #    # Interactive
-#    TASK=${TASK} \
-#    NUM_FEWSHOT=${NUM_FEWSHOT} \
+#    BENCHMARK=${BENCHMARK} \
+#    PROMPT_CONFIG=${PROMPT_CONFIG} \
 #    LENGTH=${LENGTH} \
 #    BLOCK_LENGTH=${BLOCK_LENGTH} \
 #    EARLY_EOS_STOPPING=${EARLY_EOS_STOPPING} \
+#    THRESHOLD=${THRESHOLD} \
 #    BASE_SAVE_DIR=${BASE_SAVE_DIR} \
 #    MODEL_PATH=${MODEL_PATH} \
 #    STEPS=${STEPS} \
 #    APPLY_CORRECTOR_EVERY_N_STEPS=${APPLY_CORRECTOR_EVERY_N_STEPS} \
 #    MAX_CORRECTOR_STEPS_PER_LOOP=${MAX_CORRECTOR_STEPS_PER_LOOP} \
-#    "$(realpath "./eval_llada.sh")"
+#    "$(realpath "./llada/eval_llada.sh")"
     done
   done
 done
