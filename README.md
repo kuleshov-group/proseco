@@ -142,7 +142,7 @@ This repository was built off of [UDLM](https://github.com/kuleshov-group/discre
 ```
 @article{schiff2026learn,
   title={Learn from Your Mistakes: Self-Correcting Masked Diffusion Models},
-  author={Schiff, Yair and Belhasin, Omer and Uziel, Roy and Wang, Guanghan and Arriola, Marianne and Turok, Gilad and Elad, Michael and Kuleshov, Volodymyr},
+  author={Schiff, Yair and Belhasin, Omer and Uziel, Roy and Wang, Guanghan and Arriola, Marianne and Turok, Gilad and Zilberstein, Ran and Elad, Michael and Kuleshov, Volodymyr},
   journal={arXiv preprint arXiv:2602.11590},
   year={2026}
 }
