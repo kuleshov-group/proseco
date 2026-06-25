@@ -53,19 +53,19 @@ for STEPS in 128 256 512 1024; do
       --export="${EXPORT_STR}" \
       "$(realpath "./llada/eval_llada.sh")"
 
-#    # Interactive
-#    BENCHMARK=${BENCHMARK} \
-#    PROMPT_CONFIG=${PROMPT_CONFIG} \
-#    LENGTH=${LENGTH} \
-#    BLOCK_LENGTH=${BLOCK_LENGTH} \
-#    EARLY_EOS_STOPPING=${EARLY_EOS_STOPPING} \
-#    THRESHOLD=${THRESHOLD} \
-#    BASE_SAVE_DIR=${BASE_SAVE_DIR} \
-#    MODEL_PATH=${MODEL_PATH} \
-#    STEPS=${STEPS} \
-#    APPLY_CORRECTOR_EVERY_N_STEPS=${APPLY_CORRECTOR_EVERY_N_STEPS} \
-#    MAX_CORRECTOR_STEPS_PER_LOOP=${MAX_CORRECTOR_STEPS_PER_LOOP} \
-#    "$(realpath "./llada/eval_llada.sh")"
+  #  # Interactive
+  #  BENCHMARK=${BENCHMARK} \
+  #  PROMPT_CONFIG=${PROMPT_CONFIG} \
+  #  LENGTH=${LENGTH} \
+  #  BLOCK_LENGTH=${BLOCK_LENGTH} \
+  #  EARLY_EOS_STOPPING=${EARLY_EOS_STOPPING} \
+  #  THRESHOLD=${THRESHOLD} \
+  #  BASE_SAVE_DIR=${BASE_SAVE_DIR} \
+  #  MODEL_PATH=${MODEL_PATH} \
+  #  STEPS=${STEPS} \
+  #  APPLY_CORRECTOR_EVERY_N_STEPS=${APPLY_CORRECTOR_EVERY_N_STEPS} \
+  #  MAX_CORRECTOR_STEPS_PER_LOOP=${MAX_CORRECTOR_STEPS_PER_LOOP} \
+  #  "$(realpath "./llada/eval_llada.sh")"
     done
   done
 done
