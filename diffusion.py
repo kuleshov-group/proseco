@@ -322,17 +322,18 @@ class Diffusion(L.LightningModule):
 
   def _subs_parameterization(self, logits, xt):
     # "Zero Masking Prob":
-    # log prob at the mask index = - infinity
-    logits[..., self.mask_index] += self.neg_infinity
+    # log prob at the mask index = - infinity.
+    mask_logits = torch.zeros_like(logits)
+    mask_logits[..., self.mask_index] = self.neg_infinity
+    logits = logits + mask_logits
 
     # "Copy over":
-    # Apply updates directly in the logits matrix.
-    # For the logits of the unmasked tokens, set all values
-    # to -infinity except for the indices corresponding to
-    # the unmasked tokens.
+    # For unmasked tokens, set all logits to -infinity except the observed token.
     unmasked_indices = (xt != self.mask_index)
-    logits[unmasked_indices] = self.neg_infinity
-    logits[unmasked_indices, xt[unmasked_indices]] = 0
+    if unmasked_indices.any():
+      copy_logits = torch.full_like(logits, self.neg_infinity)
+      copy_logits.scatter_(-1, xt[..., None], 0)
+      logits = torch.where(unmasked_indices[..., None], copy_logits, logits)
 
     # Normalize the logits such that x.exp() is
     # a probability distribution over vocab_size.

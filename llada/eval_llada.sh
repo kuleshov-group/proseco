@@ -26,8 +26,24 @@ threshold=${THRESHOLD:-None}
 tokenizer_path=${TOKENIZER_PATH:-'GSAI-ML/LLaDA-8B-Instruct'}
 model_path=${MODEL_PATH:-'kuleshov-group/proseco-llada-sft'}
 prompt_config=${PROMPT_CONFIG:-"${PWD}/llada/prompt_configs/code.yaml"}
-num_gpus=${NUM_GPUS:-8}
 BASE_SAVE_DIR=${BASE_SAVE_DIR:-"${PWD}/llada/outputs"}
+max_samples_arg=()
+if [[ -n "${MAX_SAMPLES:-}" ]]; then
+  max_samples_arg=(--max_samples "${MAX_SAMPLES}")
+fi
+
+if [[ -n "${NUM_GPUS:-}" ]]; then
+  num_gpus="${NUM_GPUS}"
+elif [[ -n "${SLURM_GPUS_ON_NODE:-}" ]]; then
+  num_gpus="${SLURM_GPUS_ON_NODE%%(*}"
+elif [[ -n "${SLURM_NTASKS_PER_NODE:-}" ]]; then
+  num_gpus="${SLURM_NTASKS_PER_NODE%%(*}"
+elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" && "${CUDA_VISIBLE_DEVICES}" != "NoDevFiles" ]]; then
+  IFS=',' read -r -a cuda_devices <<< "${CUDA_VISIBLE_DEVICES}"
+  num_gpus="${#cuda_devices[@]}"
+else
+  num_gpus=1
+fi
 
 save_dir="${BASE_SAVE_DIR}/${benchmark}/length-${gen_length}--block_length-${block_length}--steps-${steps}--early_eos_stopping-${early_eos_stopping}--apply_corrector_every_n_steps-${apply_corrector_every_n_steps}--max_corrector_steps_per_loop-${max_corrector_steps_per_loop}"
 
@@ -45,4 +61,5 @@ accelerate launch --num_processes "${num_gpus}" llada/eval_llada.py \
   --max_corrector_steps_per_loop "${max_corrector_steps_per_loop}" \
   --early_eos_stopping "${early_eos_stopping}" \
   --output_dir "${save_dir}" \
-  --prompt_config "${prompt_config}"
+  --prompt_config "${prompt_config}" \
+  "${max_samples_arg[@]}"

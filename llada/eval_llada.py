@@ -193,6 +193,85 @@ def _generate_batch(batch, prompt_builder, model, tokenizer, sampler_args, devic
     return {"texts": texts, "nfe": nfe, "n_tokens": n_tokens}
 
 
+def _evaluate_evalplus(eval_config, samples_file):
+    """Run evalplus directly for installed versions whose API is keyword-based."""
+    import shutil
+
+    from evalplus.evaluate import evaluate as evalplus_evaluate
+    from nemo_skills.evaluation.evaluator.code import preprocess_code
+
+    with open(samples_file, "rt", encoding="utf-8") as f:
+        samples = [preprocess_code(json.loads(line), language="python") for line in f]
+
+    with open(samples_file, "wt", encoding="utf-8") as f:
+        for sample in samples:
+            f.write(json.dumps(sample) + "\n")
+
+    evalplus_cfg = {
+        "dataset": "humaneval",
+        "samples": samples_file,
+        "base_only": False,
+        "parallel": None,
+        "i_just_wanna_run": False,
+        "test_details": False,
+        "min_time_limit": 1,
+        "gt_time_limit_factor": 4.0,
+        "mini": False,
+        "noextreme": False,
+        "version": "default",
+    }
+    evalplus_cfg.update(eval_config.get("evalplus", {}))
+
+    dataset = evalplus_cfg["dataset"]
+    if dataset == "humaneval":
+        from evalplus.data import get_human_eval_plus
+
+        expected_task_ids = set(get_human_eval_plus(
+            mini=evalplus_cfg["mini"],
+            noextreme=evalplus_cfg["noextreme"],
+            version=evalplus_cfg["version"],
+        ))
+    elif dataset == "mbpp":
+        from evalplus.data import get_mbpp_plus
+
+        expected_task_ids = set(get_mbpp_plus(
+            mini=evalplus_cfg["mini"],
+            noextreme=evalplus_cfg["noextreme"],
+            version=evalplus_cfg["version"],
+        ))
+    else:
+        expected_task_ids = set()
+
+    sample_task_ids = {sample["task_id"] for sample in samples}
+    if expected_task_ids and sample_task_ids != expected_task_ids:
+        print(
+            f"Partial evalplus sample set ({len(sample_task_ids)}/{len(expected_task_ids)} tasks); "
+            "skipping official full-set evalplus scoring."
+        )
+        with open(samples_file, "wt", encoding="utf-8") as f:
+            for sample in samples:
+                sample["is_correct"] = False
+                sample["is_correct-plus"] = False
+                sample["evalplus_note"] = "partial sample set; official evalplus scoring skipped"
+                f.write(json.dumps(sample) + "\n")
+        return
+
+    evalplus_evaluate(**evalplus_cfg)
+
+    results_file = samples_file[:-6] + "_eval_results.json"
+    with open(results_file, "rt", encoding="utf-8") as f:
+        evalplus_grades = json.load(f)
+
+    with open(samples_file, "wt", encoding="utf-8") as f:
+        for sample in samples:
+            sample_grades = evalplus_grades["eval"][sample["task_id"]][0]
+            sample["is_correct"] = sample_grades["base_status"] == "pass"
+            sample["is_correct-plus"] = sample["is_correct"] and sample_grades["plus_status"] == "pass"
+            f.write(json.dumps(sample) + "\n")
+
+    shutil.move(results_file, samples_file[:-6] + "_eval_results-saved.json")
+
+
 def _evaluate_results(all_results, eval_type, eval_config, samples_file):
     """Run nemo_skills evaluation on all results and rewrite the merged file."""
     eval_cfg = {**eval_config, "input_file": samples_file}
@@ -209,6 +288,8 @@ def _evaluate_results(all_results, eval_type, eval_config, samples_file):
         with open(samples_file, "wt", encoding="utf-8") as f:
             for result in all_results:
                 f.write(json.dumps(result) + "\n")
+    elif eval_type == "evalplus":
+        _evaluate_evalplus(eval_config, samples_file)
     else:
         evaluate(eval_type, OmegaConf.create(eval_cfg))
 
@@ -298,6 +379,7 @@ def parse_args():
     parser.add_argument("--output_dir", default=None, help="Where to write samples.jsonl / metrics.json. Eval runs only when set.")
     parser.add_argument("--prompt_config", default=None, help="Override the benchmark's default nemo_skills prompt_config (name or yaml path).")
     parser.add_argument("--eval_type", default=None, help="Override the benchmark's default nemo_skills eval_type.")
+    parser.add_argument("--max_samples", type=int, default=None, help="Optional cap on benchmark samples for smoke tests/debugging.")
 
     # model
     parser.add_argument("--model_path", required=True, help="HF model id / path (e.g. kuleshov-group/proseco-llada-sft).")
@@ -351,6 +433,8 @@ def main():
         benchmark_defaults["prompt_config"] = args.prompt_config
     if args.eval_type is not None:
         benchmark_defaults["eval_type"] = args.eval_type
+    if args.max_samples is not None:
+        data = data[:args.max_samples]
     prompt_config = benchmark_defaults["prompt_config"]
     eval_type = benchmark_defaults["eval_type"]
     eval_config = benchmark_defaults.get("eval_config", {})

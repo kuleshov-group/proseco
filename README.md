@@ -74,8 +74,24 @@ To get started, create a conda environment containing the required dependencies.
 
 ```bash
 ./create_env.sh
-conda activate proseco
+source setup_env.sh
 ```
+
+For a completely fresh rebuild of an existing environment, use:
+
+```bash
+RECREATE_ENV=1 ./create_env.sh
+source setup_env.sh
+```
+
+The setup script creates the `proseco` env with an env-local CUDA 12.8 toolkit and
+builds FlashAttention, causal-conv1d, and mamba-ssm with build isolation disabled
+so they see the installed PyTorch/CUDA ABI. It also disables Python user-site
+packages (`PYTHONNOUSERSITE=1`) to keep `~/.local` packages from leaking into the
+conda env. `mamba-ssm==2.2.4` hardcodes several old GPU architectures, so the
+script installs it from a local patched clone using `TORCH_CUDA_ARCH_LIST`
+(default: `8.0;8.6;9.0`, suitable for A100/A6000/H100/H200 nodes here). Override
+`TORCH_CUDA_ARCH_LIST` before running `create_env.sh` if you need different GPUs.
 
 Create the following directories to store saved models and slurm logs:
 ```bash

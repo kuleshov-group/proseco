@@ -14,10 +14,11 @@ max_corrector_steps_per_loop = ...
 formatting, and benchmark evaluation, and the corrector-based diffusion sampler
 (`generate.py`) for generation, reporting NFE and throughput statistics.
 
-It requires `nemo_skills` (see the block in [`create_env.sh`](../create_env.sh)):
-```bash
-pip install "git+https://github.com/NVIDIA-NeMo/Skills.git@da85a881d972e6fec847b90cf553a0bf9bf10638"
-```
+It requires the `proseco` env from [`create_env.sh`](../create_env.sh). The script
+installs the pinned `nemo_skills` code without its full remote-launcher dependency
+stack because the upstream `litellm`/`nemo_run` requirements currently disagree on
+`httpx`; the local dependencies used by this harness (`math-verify`, `evalplus`,
+prompt/data utilities, etc.) are installed explicitly.
 
 Generation is sharded across all `accelerate` processes and gathered on rank 0 for
 evaluation. Run these from the repo root. Launch
@@ -33,4 +34,13 @@ accelerate launch llada/eval_llada.py \
     --prompt_config llada/prompt_configs/code.yaml
 ```
 Use [`eval_wrapper.sh`](./eval_wrapper.sh) (also from the repo root)
-to sweep over the corrector hyperparameters.
+to sweep over the corrector hyperparameters. `eval_llada.sh` automatically detects
+`NUM_GPUS` from Slurm/CUDA environment variables; the wrapper exports it explicitly
+so a one-GPU job does not accidentally request eight accelerate processes.
+
+For a short smoke run on an interactive GPU, cap the dataset and redirect outputs
+outside the repo:
+
+```bash
+NUM_GPUS=1 MAX_SAMPLES=1 LENGTH=16 BLOCK_LENGTH=16 STEPS=1 BASE_SAVE_DIR=/tmp/proseco_llada_smoke bash llada/eval_llada.sh
+```
